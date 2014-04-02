@@ -429,13 +429,7 @@ http_request(URL, SoapAction, Request, Options, Headers, ContentType) ->
     end.
 
 inets_request(URL, SoapAction, Request, Options, Headers, ContentType) ->
-    NHeaders = [{"SOAPAction", SoapAction}|Headers],
-    NewHeaders = case proplists:get_value("Host", NHeaders) of
-                     undefined ->
-                         [{"Host", "localhost:8800"}|NHeaders];
-                     _ ->
-                         NHeaders
-                 end,
+    NewHeaders = [{"SOAPAction", SoapAction}|Headers],
     NewOptions = [{cookies, enabled}|Options],
     httpc:set_options(NewOptions),
     case httpc:request(post,
