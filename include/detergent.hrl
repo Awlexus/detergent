@@ -5,6 +5,7 @@
 
 -record(call_opts, {url, prefix=?DEFAULT_PREFIX,
                     http_headers=[],
+                    http_options=[],
                     http_client_options=[],
                     request_logger=fun(_) -> ok end,
                     response_logger=fun(_) -> ok end}).

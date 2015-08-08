@@ -9,7 +9,7 @@
 
 -module(detergent).
 
--export([initModel/1, initModel/2,
+-export([initModel/1, initModel/2, initModel/3,
      initModelFile/1,
      config_file_xsd/0,
      call/3, call/4, call/5, call/6, call/7,
@@ -199,6 +199,7 @@ call_attach(Wsdl, Operation, Header, Msg, Attachments, CallOpts)
 call_attach(#wsdl{operations = Operations, model = Model},
             Operation, Port, Service, Headers, Message, Attachments,
             #call_opts{url=Url, http_headers=HttpHeaders,
+                       http_options=HttpOptions,
                        http_client_options=HttpClientOptions,
                        request_logger=RequestLogger,
                        response_logger=ResponseLogger}) ->
@@ -221,6 +222,7 @@ call_attach(#wsdl{operations = Operations, model = Model},
                    Url
             end,
             HttpRes = http_request(URL, SoapAction, Request,
+                                           HttpOptions,
                                            HttpClientOptions, HttpHeaders,
                                            ContentType),
                     ?dbg("+++ HttpRes = ~p~n", [HttpRes]),
@@ -285,8 +287,11 @@ initModel(WsdlFile) ->
     initModel(WsdlFile, ?DEFAULT_PREFIX).
 
 initModel(WsdlFile, Prefix) ->
+    initModel(WsdlFile, Prefix, []).
+
+initModel(WsdlFile, Prefix, HttpOptions) ->
     PrivDir = priv_dir(),
-    initModel2(WsdlFile, Prefix, PrivDir, undefined, undefined).
+    initModel2(WsdlFile, HttpOptions, Prefix, PrivDir, undefined, undefined).
 
 initModelFile(ConfigFile) ->
     {ok, ConfigSchema} = erlsom:compile_xsd(config_file_xsd()),
@@ -296,7 +301,7 @@ initModelFile(ConfigFile) ->
               wsdl_file = Wsdl,
               add_files = AddFiles} = Config,
     #xsd_file{name = WsdlFile, prefix = Prefix, import_specs = Import} = Wsdl,
-    initModel2(WsdlFile, Prefix, XsdPath, Import, AddFiles).
+    initModel2(WsdlFile, [], Prefix, XsdPath, Import, AddFiles).
 
 priv_dir() ->
     case code:priv_dir(detergent) of
@@ -306,7 +311,7 @@ priv_dir() ->
             A
     end.
 
-initModel2(WsdlFile, Prefix, Path, Import, AddFiles) ->
+initModel2(WsdlFile, HttpOptions, Prefix, Path, Import, AddFiles) ->
     WsdlName = filename:join([Path, "wsdl.xsd"]),
     IncludeWsdl = {"http://schemas.xmlsoap.org/wsdl/", "wsdl", WsdlName},
     {ok, WsdlModel} = erlsom:compile_xsd_file(filename:join([Path, "soap.xsd"]),
@@ -317,7 +322,7 @@ initModel2(WsdlFile, Prefix, Path, Import, AddFiles) ->
     IncludeDir = filename:dirname(WsdlFile),
     Options = [{dir_list, [IncludeDir]} | makeOptions(Import)],
     %% parse Wsdl
-    {Model, Operations} = parseWsdls([WsdlFile], Prefix, WsdlModel2, Options, {undefined, []}),
+    {Model, Operations} = parseWsdls([WsdlFile], HttpOptions, Prefix, WsdlModel2, Options, {undefined, []}),
     %% TODO: add files as required
     %% now compile envelope.xsd, and add Model
     {ok, EnvelopeModel} = erlsom:compile_xsd_file(filename:join([Path, "envelope.xsd"]),
@@ -331,10 +336,10 @@ initModel2(WsdlFile, Prefix, Path, Import, AddFiles) ->
 %%% Parse a list of WSDLs and import (recursively)
 %%% Returns {Model, Operations}
 %%% --------------------------------------------------------------------
-parseWsdls([], _Prefix, _WsdlModel, _Options, Acc) ->
+parseWsdls([], _HttpOptions, _Prefix, _WsdlModel, _Options, Acc) ->
   Acc;
-parseWsdls([WsdlFile | Tail], Prefix, WsdlModel, Options, {AccModel, AccOperations}) ->
-  {ok, WsdlFileContent} = get_url_file(rmsp(WsdlFile)),
+parseWsdls([WsdlFile | Tail], HttpOptions, Prefix, WsdlModel, Options, {AccModel, AccOperations}) ->
+  {ok, WsdlFileContent} = get_url_file(rmsp(WsdlFile), HttpOptions),
   {ok, ParsedWsdl, _} = erlsom:scan(WsdlFileContent, WsdlModel),
   %% get the xsd elements from this model, and hand it over to erlsom_compile.
   Xsds = getXsdsFromWsdl(ParsedWsdl),
@@ -357,8 +362,8 @@ parseWsdls([WsdlFile | Tail], Prefix, WsdlModel, Options, {AccModel, AccOperatio
   %% processed as well).
   %% For the moment, the namespace is ignored on operations etc.
   %% this makes it a bit easier to deal with imported wsdl's.
-  Acc3 = parseWsdls(Imports, Prefix, WsdlModel, Options, Acc2),
-  parseWsdls(Tail, Prefix, WsdlModel, Options, Acc3).
+  Acc3 = parseWsdls(Imports, HttpOptions, Prefix, WsdlModel, Options, Acc2),
+  parseWsdls(Tail, HttpOptions, Prefix, WsdlModel, Options, Acc3).
 
 %%% --------------------------------------------------------------------
 %%% build a list: [{Namespace, Prefix, Xsd}, ...] for all the Xsds in the WSDL.
@@ -396,15 +401,15 @@ addSchemas([Xsd| Tail], AccModel, Prefix, Options) ->
 %%% --------------------------------------------------------------------
 %%% Get a file from an URL spec.
 %%% --------------------------------------------------------------------
-get_url_file(URL) ->
+get_url_file(URL, HttpOptions) ->
     case xmerl_uri:parse(URL) of
-        {http, _, _, _, _} -> get_remote_file(URL);
-        {https, _, _, _, _} -> get_remote_file(URL);
+        {http, _, _, _, _} -> get_remote_file(URL, HttpOptions);
+        {https, _, _, _, _} -> get_remote_file(URL, HttpOptions);
         _Other -> get_local_file(URL)
     end.
 
-get_remote_file(URL) ->
-    case httpc:request(URL) of
+get_remote_file(URL, HttpOptions) ->
+    case httpc:request(get, {URL, []}, HttpOptions, []) of
     {ok,{{_HTTP,200,_OK}, _Headers, Body}} ->
         {ok, Body};
     {ok,{{_HTTP,RC,Emsg}, _Headers, _Body}} ->
@@ -422,17 +427,17 @@ get_local_file(Fname) ->
 %%% --------------------------------------------------------------------
 %%% Make a HTTP Request
 %%% --------------------------------------------------------------------
-http_request(URL, SoapAction, Request, Options, Headers, ContentType) ->
+http_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType) ->
     case code:ensure_loaded(ibrowse) of
     {module, ibrowse} ->
         %% If ibrowse exist in the path then let's use it...
-        ibrowse_request(URL, SoapAction, Request, Options, Headers, ContentType);
+        ibrowse_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType);
     _ ->
         %% ...otherwise, let's use the OTP http client.
-        inets_request(URL, SoapAction, Request, Options, Headers, ContentType)
+        inets_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType)
     end.
 
-inets_request(URL, SoapAction, Request, Options, Headers, ContentType) ->
+inets_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType) ->
     NewHeaders = [{"SOAPAction", SoapAction}|Headers],
     NewOptions = [{cookies, enabled}|Options],
     httpc:set_options(NewOptions),
@@ -440,7 +445,7 @@ inets_request(URL, SoapAction, Request, Options, Headers, ContentType) ->
                       {URL,NewHeaders,
                        ContentType,
                        Request},
-                      [{timeout,?HTTP_REQ_TIMEOUT}],
+                      [{timeout,?HTTP_REQ_TIMEOUT}|HttpOptions],
                       [{sync, true}, {full_result, true}, {body_format, string}]) of
         {ok,{{_HTTP,200,_OK},ResponseHeaders,ResponseBody}} ->
             {ok, 200, ResponseHeaders, ResponseBody};
@@ -452,7 +457,7 @@ inets_request(URL, SoapAction, Request, Options, Headers, ContentType) ->
             Other
     end.
 
-ibrowse_request(URL, SoapAction, Request, Options, Headers, ContentType) ->
+ibrowse_request(URL, SoapAction, Request, [], Options, Headers, ContentType) ->
     case start_ibrowse() of
         ok ->
             NewHeaders = [{"Content-Type", ContentType}, {"SOAPAction", SoapAction} | Headers],
