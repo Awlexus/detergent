@@ -338,12 +338,17 @@ parseWsdls([WsdlFile | Tail], Prefix, WsdlModel, Options, {AccModel, AccOperatio
   {ok, ParsedWsdl, _} = erlsom:scan(WsdlFileContent, WsdlModel),
   %% get the xsd elements from this model, and hand it over to erlsom_compile.
   Xsds = getXsdsFromWsdl(ParsedWsdl),
-  %% Now we need to build a list: [{Namespace, Xsd, Prefix}, ...] for all the Xsds in the WSDL.
+  %% Now we need to build a list: [{Namespace, Prefix, Xsd}, ...] for all the Xsds in the WSDL.
   %% This list is used when a schema inlcudes one of the other schemas. The AXIS java2wsdl
   %% generates wsdls that depend on this feature.
   ImportList = makeImportList(Xsds, []),
-  %% TODO: pass the right options here
-  Model2 = addSchemas(Xsds, AccModel, Prefix, Options, ImportList),
+  %% Append ImportList to include_files in Options
+  IncludeFiles = case lists:keysearch('include_files', 1, Options) of
+                   {value, {_, Files}} -> Files;
+                   _ -> []
+                 end,
+  Options2 = lists:keystore('include_files', 1, Options, {'include_files', ImportList++IncludeFiles}),
+  Model2 = addSchemas(Xsds, AccModel, Prefix, Options2),
   Ports = getPorts(ParsedWsdl),
   Operations = getOperations(ParsedWsdl, Ports),
   Imports = getImports(ParsedWsdl),
@@ -356,7 +361,7 @@ parseWsdls([WsdlFile | Tail], Prefix, WsdlModel, Options, {AccModel, AccOperatio
   parseWsdls(Tail, Prefix, WsdlModel, Options, Acc3).
 
 %%% --------------------------------------------------------------------
-%%% build a list: [{Namespace, Xsd}, ...] for all the Xsds in the WSDL.
+%%% build a list: [{Namespace, Prefix, Xsd}, ...] for all the Xsds in the WSDL.
 %%% This list is used when a schema inlcudes one of the other schemas. The AXIS java2wsdl
 %%% generates wsdls that depend on this feature.
 makeImportList([], Acc) ->
@@ -371,23 +376,22 @@ makeImportList([ Xsd | Tail], Acc) ->
 %%% Returns Model
 %%% (TODO: using the same prefix for all XSDS makes no sense)
 %%% --------------------------------------------------------------------
-addSchemas([], AccModel, _Prefix, _Options, _ImportList) ->
+addSchemas([], AccModel, _Prefix, _Options) ->
   AccModel;
-addSchemas([Xsd| Tail], AccModel, Prefix, Options, ImportList) ->
+addSchemas([Xsd| Tail], AccModel, Prefix, Options) ->
   Model2 = case Xsd of
              undefined ->
                AccModel;
              _ ->
                {ok, Model} =
                  erlsom_compile:compile_parsed_xsd(Xsd,
-                                                   [{prefix, Prefix},
-                                                    {include_files, ImportList} |Options]),
+                                                   [{prefix, Prefix} | Options]),
                case AccModel of
                  undefined -> Model;
                  _ -> erlsom:add_model(AccModel, Model)
                end
            end,
-  addSchemas(Tail, Model2, Prefix, Options, ImportList).
+  addSchemas(Tail, Model2, Prefix, Options).
 
 %%% --------------------------------------------------------------------
 %%% Get a file from an URL spec.
@@ -521,7 +525,7 @@ findHeader0(_Label, undefined) ->
 makeOptions(undefined) ->
   [];
 makeOptions(Import) ->
-  lists:map(fun makeOption/1, Import).
+  [{include_files, lists:map(fun makeOption/1, Import)}].
 
 %% -record(import_specs, {atts, namespace, prefix, location}).
 makeOption(#import_specs{namespace = Ns, prefix = Pf, location = Lc}) ->
