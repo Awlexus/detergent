@@ -321,8 +321,9 @@ initModel2(WsdlFile, HttpOptions, Prefix, Path, Import, AddFiles) ->
     WsdlModel2 = erlsom:add_xsd_model(WsdlModel),
     IncludeDir = filename:dirname(WsdlFile),
     Options = [{dir_list, [IncludeDir]} | makeOptions(Import)],
+    Options2 = [{include_fun, fun findFile/4} | Options],
     %% parse Wsdl
-    {Model, Operations} = parseWsdls([WsdlFile], HttpOptions, Prefix, WsdlModel2, Options, {undefined, []}),
+    {Model, Operations} = parseWsdls([WsdlFile], HttpOptions, Prefix, WsdlModel2, Options2, {undefined, []}),
     %% TODO: add files as required
     %% now compile envelope.xsd, and add Model
     {ok, EnvelopeModel} = erlsom:compile_xsd_file(filename:join([Path, "envelope.xsd"]),
@@ -364,6 +365,47 @@ parseWsdls([WsdlFile | Tail], HttpOptions, Prefix, WsdlModel, Options, {AccModel
   %% this makes it a bit easier to deal with imported wsdl's.
   Acc3 = parseWsdls(Imports, HttpOptions, Prefix, WsdlModel, Options, Acc2),
   parseWsdls(Tail, HttpOptions, Prefix, WsdlModel, Options, Acc3).
+
+%% resolve relative import URIs
+%% s.a. https://github.com/willemdj/erlsom/blob/master/src/erlsom_lib.erl#L719 findFile/4
+%% and https://github.com/willemdj/erlsom/blob/master/src/erlsom_lib.erl#L790 find_xsd/4
+
+findFile(Namespace, Location, IncludeFiles, IncludeDirs) ->
+  case lists:keysearch(Namespace, 1, IncludeFiles) of
+% given and known Namespace (xs:import and initModelFile/1)
+    {value, {_, Prefix, Loc}} ->
+      {ok, FileContent} = get_url_file(Loc, []), %%HttpOptions),
+      {FileContent, Prefix};
+% missing/unknown Namespace, need to find Location (xs:include and initModel/1,2,3)
+    _ ->
+      ResolvedLocation = resolveRelativeLocation(Location, IncludeDirs),
+      {ok, FileContent} = get_url_file(ResolvedLocation, []), %%HttpOptions),
+      {FileContent, undefined}
+  end.
+
+resolveRelativeLocation("https://"++_ = URL, _BaseLocation) ->
+    URL;
+resolveRelativeLocation("http://"++_ = URL, _BaseLocation) ->
+    URL;
+resolveRelativeLocation("file://"++Fname, _BaseLocation) ->
+    Fname;
+%resolveRelativeLocation("/"++RelLocation, []) ->
+%    RelLocation;
+%resolveRelativeLocation(Location, []) ->
+%    Location;
+resolveRelativeLocation("/"++RelLocation = Location, [BaseLocation]) ->
+  case http_uri:parse(BaseLocation) of
+    {ok, {Scheme, _UserInfo, Host, Port, _Path, _Query}} ->
+      atom_to_list(Scheme)++"://"++Host++":"++integer_to_list(Port)++Location;
+    _ -> RelLocation
+  end;
+resolveRelativeLocation(Location, [BaseLocation]) ->
+  case http_uri:parse(BaseLocation) of
+    {ok, {Scheme, _UserInfo, Host, Port, Path, _Query}} ->
+      OneUpPath = filename:dirname(Path), % Bad Hack, actually we'd need the enclosing location
+      atom_to_list(Scheme)++"://"++Host++":"++integer_to_list(Port)++OneUpPath++"/"++Location;
+    _ -> filename:join([BaseLocation, Location])
+  end.
 
 %%% --------------------------------------------------------------------
 %%% build a list: [{Namespace, Prefix, Xsd}, ...] for all the Xsds in the WSDL.
