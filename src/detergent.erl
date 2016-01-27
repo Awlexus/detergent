@@ -9,7 +9,7 @@
 
 -module(detergent).
 
--export([initModel/1, initModel/2, initModel/3,
+-export([initModel/1, initModel/2, initModel/3, initModel/5,
      initModelFile/1,
      config_file_xsd/0,
      call/3, call/4, call/5, call/6, call/7,
@@ -292,6 +292,10 @@ initModel(WsdlFile, Prefix) ->
 initModel(WsdlFile, Prefix, HttpOptions) ->
     PrivDir = priv_dir(),
     initModel2(WsdlFile, HttpOptions, Prefix, PrivDir, undefined, undefined).
+
+initModel(WsdlFile, Prefix, HttpOptions, Import, AddFiles) ->
+    PrivDir = priv_dir(),
+    initModel2(WsdlFile, HttpOptions, Prefix, PrivDir, Import, AddFiles).
 
 initModelFile(ConfigFile) ->
     {ok, ConfigSchema} = erlsom:compile_xsd(config_file_xsd()),
