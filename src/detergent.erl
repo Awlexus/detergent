@@ -324,7 +324,11 @@ initModel2(WsdlFile, HttpOptions, Prefix, Path, Import, AddFiles) ->
     %% add the xsd model (since xsd is also used in the wsdl)
     WsdlModel2 = erlsom:add_xsd_model(WsdlModel),
     IncludeDir = filename:dirname(WsdlFile),
-    Options = [{dir_list, [IncludeDir]} | makeOptions(Import)],
+    OneUpPath = case filename:basename(IncludeDir) of
+      "esor" -> filename:dirname(IncludeDir); % Bad Hack, actually we'd need the absolute location
+      _ -> IncludeDir
+    end,
+    Options = [{dir_list, [OneUpPath]} | makeOptions(Import)],
     Options2 = [{include_fun, fun findFile/4} | Options],
     %% parse Wsdl
     {Model, Operations} = parseWsdls([WsdlFile], HttpOptions, Prefix, WsdlModel2, Options2, {undefined, []}),
@@ -406,8 +410,7 @@ resolveRelativeLocation("/"++RelLocation = Location, [BaseLocation]) ->
 resolveRelativeLocation(Location, [BaseLocation]) ->
   case http_uri:parse(BaseLocation) of
     {ok, {Scheme, _UserInfo, Host, Port, Path, _Query}} ->
-      OneUpPath = filename:dirname(Path), % Bad Hack, actually we'd need the enclosing location
-      atom_to_list(Scheme)++"://"++Host++":"++integer_to_list(Port)++OneUpPath++"/"++Location;
+      atom_to_list(Scheme)++"://"++Host++":"++integer_to_list(Port)++Path++"/"++Location;
     _ -> filename:join([BaseLocation, Location])
   end.
 
