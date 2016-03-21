@@ -450,6 +450,9 @@ addSchemas([Xsd| Tail], AccModel, Prefix, Options) ->
 %%% --------------------------------------------------------------------
 %%% Get a file from an URL spec.
 %%% --------------------------------------------------------------------
+get_url_file({binary, Bin}, _) ->
+    {ok, Bin};
+
 get_url_file(URL, HttpOptions) ->
     SchemaFun = fun(SchemeStr) ->
         case SchemeStr of
