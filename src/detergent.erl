@@ -357,8 +357,8 @@ parseWsdls([WsdlFile | Tail], HttpOptions, Prefix, WsdlModel, Options, {AccModel
   %% generates wsdls that depend on this feature.
   ImportList = makeImportList(Xsds, []),
   %% Append ImportList to include_files in Options
-  IncludeFiles = case lists:keysearch('include_files', 1, Options) of
-                   {value, {_, Files}} -> Files;
+  IncludeFiles = case lists:keyfind('include_files', 1, Options) of
+                   {_, Files} -> Files;
                    _ -> []
                  end,
   Options2 = lists:keystore('include_files', 1, Options, {'include_files', ImportList++IncludeFiles}),
@@ -379,9 +379,9 @@ parseWsdls([WsdlFile | Tail], HttpOptions, Prefix, WsdlModel, Options, {AccModel
 %% and https://github.com/willemdj/erlsom/blob/master/src/erlsom_lib.erl#L790 find_xsd/4
 
 findFile(Namespace, Location, IncludeFiles, IncludeDirs) ->
-  case lists:keysearch(Namespace, 1, IncludeFiles) of
+  case lists:keyfind(Namespace, 1, IncludeFiles) of
 % given and known Namespace (xs:import and initModelFile/1)
-    {value, {_, Prefix, Loc}} ->
+    {_, Prefix, Loc} ->
       {ok, FileContent} = get_url_file(Loc, []), %%HttpOptions),
       {FileContent, Prefix};
 % missing/unknown Namespace, need to find Location (xs:include and initModel/1,2,3)
