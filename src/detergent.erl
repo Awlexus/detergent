@@ -451,9 +451,15 @@ addSchemas([Xsd| Tail], AccModel, Prefix, Options) ->
 %%% Get a file from an URL spec.
 %%% --------------------------------------------------------------------
 get_url_file(URL, HttpOptions) ->
-    case xmerl_uri:parse(URL) of
-        {http, _, _, _, _} -> get_remote_file(URL, HttpOptions);
-        {https, _, _, _, _} -> get_remote_file(URL, HttpOptions);
+    SchemaFun = fun(SchemeStr) ->
+        case SchemeStr of
+            "http" -> valid;
+            "https" -> valid;
+            _ -> {error, "Not supported"}
+        end
+    end,
+    case http_uri:parse(URL, [{schema_validation_fun, SchemaFun}]) of
+        {ok, _} -> get_remote_file(URL, HttpOptions);
         _Other -> get_local_file(URL)
     end.
 
@@ -470,8 +476,7 @@ get_remote_file(URL, HttpOptions) ->
     end.
 
 get_local_file(Fname) ->
-    {ok, Bin} = file:read_file(Fname),
-    {ok, binary_to_list(Bin)}.
+    file:read_file(Fname).
 
 %%% --------------------------------------------------------------------
 %%% Make a HTTP Request
