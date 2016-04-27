@@ -329,7 +329,7 @@ initModel2(WsdlFile, HttpOptions, Prefix, Path, Import, AddFiles) ->
       _ -> IncludeDir
     end,
     Options = [{dir_list, [OneUpPath]} | makeOptions(Import)],
-    Options2 = [{include_fun, fun findFile/4} | Options],
+    Options2 = [{include_fun, fun(N, L, F, D) -> findFile(N, L, F, D, HttpOptions) end} | Options],
     %% parse Wsdl
     {Model, Operations} = parseWsdls([WsdlFile], HttpOptions, Prefix, WsdlModel2, Options2, {undefined, []}),
     %% TODO: add files as required
@@ -378,16 +378,16 @@ parseWsdls([WsdlFile | Tail], HttpOptions, Prefix, WsdlModel, Options, {AccModel
 %% s.a. https://github.com/willemdj/erlsom/blob/master/src/erlsom_lib.erl#L719 findFile/4
 %% and https://github.com/willemdj/erlsom/blob/master/src/erlsom_lib.erl#L790 find_xsd/4
 
-findFile(Namespace, Location, IncludeFiles, IncludeDirs) ->
+findFile(Namespace, Location, IncludeFiles, IncludeDirs, HttpOptions) ->
   case lists:keyfind(Namespace, 1, IncludeFiles) of
 % given and known Namespace (xs:import and initModelFile/1)
     {_, Prefix, Loc} ->
-      {ok, FileContent} = get_url_file(Loc, []), %%HttpOptions),
+      {ok, FileContent} = get_url_file(Loc, HttpOptions),
       {FileContent, Prefix};
 % missing/unknown Namespace, need to find Location (xs:include and initModel/1,2,3)
     _ ->
       ResolvedLocation = resolveRelativeLocation(Location, IncludeDirs),
-      {ok, FileContent} = get_url_file(ResolvedLocation, []), %%HttpOptions),
+      {ok, FileContent} = get_url_file(ResolvedLocation, HttpOptions),
       {FileContent, undefined}
   end.
 
