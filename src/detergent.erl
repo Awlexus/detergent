@@ -498,11 +498,15 @@ inets_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentTy
     NewHeaders = [{"SOAPAction", SoapAction}|Headers],
     NewOptions = [{cookies, enabled}|Options],
     httpc:set_options(NewOptions),
+    NewHttpOptions = case lists:keymember(timeout, 1, HttpOptions) of
+      false -> [{timeout,?HTTP_REQ_TIMEOUT}|HttpOptions];
+      true -> HttpOptions
+    end,
     case httpc:request(post,
                       {URL,NewHeaders,
                        ContentType,
                        Request},
-                      [{timeout,?HTTP_REQ_TIMEOUT}|HttpOptions],
+                      NewHttpOptions,
                       [{sync, true}, {full_result, true}, {body_format, string}]) of
         {ok,{{_HTTP,200,_OK},ResponseHeaders,ResponseBody}} ->
             {ok, 200, ResponseHeaders, ResponseBody};
