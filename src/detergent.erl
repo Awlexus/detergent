@@ -209,7 +209,7 @@ call_attach(#wsdl{operations = Operations, model = Model},
         %% Add the Soap envelope
         Envelope = mk_envelope(Message, Headers),
         %% Encode the message
-        case erlsom:write(Envelope, Model) of
+        case erlsom:write(Envelope, Model, [{output, chardata}]) of
         {ok, XmlMessage} ->
             RequestLogger(XmlMessage),
             {ContentType, Request} =
@@ -495,7 +495,11 @@ http_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentTyp
     end.
 
 inets_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType) ->
-    NewHeaders = [{"SOAPAction", SoapAction}|Headers],
+    % To pass an iolist we need to wrap it in a fun.
+    RequestFun = {fun(Acc) -> Acc end, {ok, Request, eof}},
+    ContentLength = erlang:iolist_size(Request),
+    Headers2 = [{"content-length", integer_to_list(ContentLength)} | Headers],
+    NewHeaders = [{"SOAPAction", SoapAction}|Headers2],
     NewOptions = [{cookies, enabled}|Options],
     httpc:set_options(NewOptions),
     NewHttpOptions = case lists:keymember(timeout, 1, HttpOptions) of
@@ -505,7 +509,7 @@ inets_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentTy
     case httpc:request(post,
                       {URL,NewHeaders,
                        ContentType,
-                       Request},
+                       RequestFun},
                       NewHttpOptions,
                       [{sync, true}, {full_result, true}, {body_format, string}]) of
         {ok,{{_HTTP,200,_OK},ResponseHeaders,ResponseBody}} ->
@@ -521,10 +525,11 @@ inets_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentTy
 ibrowse_request(URL, SoapAction, Request, [], Options, Headers, ContentType) ->
     case start_ibrowse() of
         ok ->
+            FlatRequest = lists:flatten(Request),
             NewHeaders = [{"Content-Type", ContentType}, {"SOAPAction", SoapAction} | Headers],
             NewOptions = Options,
                          %%[{content_type, "text/xml; encoding=utf-8"} | Options],
-            case ibrowse:send_req(URL, NewHeaders, post, Request, NewOptions) of
+            case ibrowse:send_req(URL, NewHeaders, post, FlatRequest, NewOptions) of
                 {ok, Status, ResponseHeaders, ResponseBody} ->
                     {ok, list_to_integer(Status), ResponseHeaders, ResponseBody};
                 {error, Reason} ->
@@ -546,9 +551,9 @@ rmsp(Str) -> string:strip(Str, left).
 
 
 make_request_body(Content, []) ->
-        {"text/xml; charset=utf-8", "<?xml version=\"1.0\" encoding=\"utf-8\"?>"++Content};
+        {"text/xml; charset=utf-8", ["<?xml version=\"1.0\" encoding=\"utf-8\"?>", Content]};
 make_request_body(Content, AttachedFiles) ->
-        {"application/dime", detergent_dime:encode("<?xml version=\"1.0\" encoding=\"utf-8\"?>"++Content, AttachedFiles)}.
+        {"application/dime", detergent_dime:encode(lists:flatten(["<?xml version=\"1.0\" encoding=\"utf-8\"?>", Content]), AttachedFiles)}.
 
 
 makeFault(FaultCode, FaultString) ->
