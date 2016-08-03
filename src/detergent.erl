@@ -249,7 +249,7 @@ parseMessage(Message, #wsdl{model = Model}) ->
     parseMessage(Message, Model);
 %%
 parseMessage(Message, Model) ->
-    case erlsom:scan(Message, Model) of
+    case erlsom:scan(Message, Model, [{output_encoding, utf8}]) of
     {ok, #'soap:Envelope'{'Body' = #'soap:Body'{choice = Body},
                   'Header' = undefined}, _} ->
         {ok, undefined, Body};
@@ -485,7 +485,8 @@ get_local_file(Fname) ->
 %%% Make a HTTP Request
 %%% --------------------------------------------------------------------
 http_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType) ->
-    case code:ensure_loaded(ibrowse) of
+    % ibrowse disabled, because unknown how it supports the binary formats:
+    case disabled of %% code:ensure_loaded(ibrowse) of
     {module, ibrowse} ->
         %% If ibrowse exist in the path then let's use it...
         ibrowse_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType);
@@ -511,7 +512,7 @@ inets_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentTy
                        ContentType,
                        RequestFun},
                       NewHttpOptions,
-                      [{sync, true}, {full_result, true}, {body_format, string}]) of
+                      [{sync, true}, {full_result, true}, {body_format, binary}]) of
         {ok,{{_HTTP,200,_OK},ResponseHeaders,ResponseBody}} ->
             {ok, 200, ResponseHeaders, ResponseBody};
         {ok,{{_HTTP,500,_Descr},ResponseHeaders,ResponseBody}} ->
