@@ -326,6 +326,7 @@ initModel2(WsdlFile, HttpOptions, Prefix, Path, Import, AddFiles) ->
     IncludeDir = filename:dirname(WsdlFile),
     OneUpPath = case filename:basename(IncludeDir) of
       "esor" -> filename:dirname(IncludeDir); % Bad Hack, actually we'd need the absolute location
+      "esor12" -> filename:dirname(IncludeDir); % Bad Hack, actually we'd need the absolute location
       _ -> IncludeDir
     end,
     Options = [{dir_list, [OneUpPath]} | makeOptions(Import)],
@@ -379,14 +380,19 @@ parseWsdls([WsdlFile | Tail], HttpOptions, Prefix, WsdlModel, Options, {AccModel
 %% and https://github.com/willemdj/erlsom/blob/master/src/erlsom_lib.erl#L790 find_xsd/4
 
 findFile(Namespace, Location, IncludeFiles, IncludeDirs, HttpOptions) ->
+      %io:format("(1) IncludeFiles: ~p~n", [IncludeFiles]),
+      %io:format("(2) Namespace: ~p~n", [Namespace]),
   case lists:keyfind(Namespace, 1, IncludeFiles) of
 % given and known Namespace (xs:import and initModelFile/1)
     {_, Prefix, Loc} ->
+      %io:format("(3a) Loc: ~p~n", [Loc]),
       {ok, FileContent} = get_url_file(Loc, HttpOptions),
       {FileContent, Prefix};
 % missing/unknown Namespace, need to find Location (xs:include and initModel/1,2,3)
     _ ->
       ResolvedLocation = resolveRelativeLocation(Location, IncludeDirs),
+      %io:format("(3b) ResolvedLocation: ~p~n", [ResolvedLocation]),
+      %io:format("(3b) IncludeDirs: ~p~n", [IncludeDirs]),
       {ok, FileContent} = get_url_file(ResolvedLocation, HttpOptions),
       {FileContent, undefined}
   end.
