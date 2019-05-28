@@ -227,7 +227,14 @@ call_attach(#wsdl{operations = Operations, model = Model},
             case HttpRes of
             {ok, _Code, _ReturnHeaders, Body} ->
                 ResponseLogger(Body),
-                parseMessage(Body, Model);
+                case parseMessage(Body, Model) of
+                Error = {error, {decoding, _}} ->
+                    ErrorMsg = unicode:characters_to_binary(["[Detergent] Could not decode the following data: ", Body]),
+                    logger:error(ErrorMsg),
+                    
+                    Error;
+                V-> V
+                end;
             Error ->
                 %% in case of HTTP error: return
                             %% {error, description}
