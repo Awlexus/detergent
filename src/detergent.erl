@@ -227,16 +227,13 @@ call_attach(#wsdl{operations = Operations, model = Model},
                                            ContentType),
                     ?dbg("+++ HttpRes = ~p~n", [HttpRes]),
             case HttpRes of
-            {ok, _Code, _ReturnHeaders, Body} ->
+            {ok, Code, _ReturnHeaders, Body} ->
                 ResponseLogger(Body),
                 case parseMessage(Body, Model) of
                 Error = {error, {decoding, _}} ->
-                    logger:error("[Detergent] Could not decode the following data: " ++ Body),
-                    
+                    logger:error("[Detergent] Could not decode the following data (" ++ integer_to_list(Code) ++ "): " ++ Body), 
                     Error;
                 V -> 
-                    logger:info("[Detergent] Successfully called " ++ Address),
-
                     V
                 end;
             Error ->
