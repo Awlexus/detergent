@@ -227,10 +227,11 @@ call_attach(#wsdl{operations = Operations, model = Model},
                                            ContentType),
                     ?dbg("+++ HttpRes = ~p~n", [HttpRes]),
             case HttpRes of
-            {ok, Code, _ReturnHeaders, Body} ->
+            {ok, Code, ReturnHeaders, Body} ->
                 ResponseLogger(Body),
                 case parseMessage(Body, Model) of
                 Error = {error, {decoding, _}} ->
+                    logger:error("[Detergent] Headers: " ++ lists:flatten(io_lib:format("~p", [ReturnHeaders]))),
                     logger:error("[Detergent] Could not decode the following data (" ++ integer_to_list(Code) ++ "): " ++ Body), 
                     Error;
                 V -> 
