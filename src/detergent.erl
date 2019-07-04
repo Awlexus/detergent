@@ -192,6 +192,19 @@ call_attach(Wsdl, Operation, Header, Msg, Attachments, CallOpts)
         Else
     end.
 
+get_nested_safe(Data, Indexes) ->
+	try get_nested(Data, Indexes) of
+		Item -> {ok, Item}
+	catch
+		error:Error -> {error, Error}
+	end.
+
+get_nested(Data, []) ->
+    Data;
+get_nested(Data, [Index | Rest]) ->
+    Item = lists:nth(Index, Data),
+    get_nested(Item, Rest).
+
 
 %%% --------------------------------------------------------------------
 %%% Make a SOAP request (with attachments)
@@ -221,13 +234,26 @@ call_attach(#wsdl{operations = Operations, model = Model},
                 _ ->
                    Url
             end,
-            HttpRes = http_request(URL, SoapAction, Request,
+            {Time, HttpRes} = timer:tc(fun() ->
+              http_request(URL, SoapAction, Request,
                                            HttpOptions,
                                            HttpClientOptions, HttpHeaders,
-                                           ContentType),
-                    ?dbg("+++ HttpRes = ~p~n", [HttpRes]),
+                                           ContentType) end),
+            ?dbg("+++ HttpRes = ~p~n", [HttpRes]),
             case HttpRes of
             {ok, Code, ReturnHeaders, Body} ->
+                case get_nested_safe(Request, [2,1,5,2,1,5,1,1,2,2]) of
+                    {ok, "tr:ArchiveRetrievalRequest"} ->
+                        case get_nested_safe(Request, [2,1,5,2,1,5,1,1,5,2,7]) of
+                          {ok, Aoid} ->
+                            StringHeaders = lists:flatten(io_lib:format("~0p", [ReturnHeaders])),
+                            logger:debug(io_lib:format("[Detergent] Requesting AOID: ~p, Status ~p. Bytes ~p. Time: ~pms. Headers: " ++ StringHeaders, [Aoid, Code, byte_size(Body), Time]));
+                          _ -> 
+                            nil
+                        end;
+                    _ -> nil
+                  end,
+
                 ResponseLogger(Body),
                 case parseMessage(Body, Model) of
                 Error = {error, {decoding, _}} ->
