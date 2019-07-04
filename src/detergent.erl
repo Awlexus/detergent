@@ -257,8 +257,7 @@ call_attach(#wsdl{operations = Operations, model = Model},
                 ResponseLogger(Body),
                 case parseMessage(Body, Model) of
                 Error = {error, {decoding, _}} ->
-                    logger:error("[Detergent] Headers: " ++ lists:flatten(io_lib:format("~p", [ReturnHeaders]))),
-                    logger:error("[Detergent] Could not decode the following data (" ++ integer_to_list(Code) ++ "): " ++ Body), 
+                    logger:error("[Detergent] Could not decode the following data: " ++ Body), 
                     Error;
                 V -> 
                     V
