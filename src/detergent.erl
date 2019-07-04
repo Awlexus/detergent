@@ -247,7 +247,7 @@ call_attach(#wsdl{operations = Operations, model = Model},
                         case get_nested_safe(Request, [2,1,5,2,1,5,1,1,5,2,7]) of
                           {ok, Aoid} ->
                             StringHeaders = lists:flatten(io_lib:format("~0p", [ReturnHeaders])),
-                            logger:debug(io_lib:format("[Detergent] Requesting AOID: ~p, Status ~p. Bytes ~p. Time: ~pms. Headers: " ++ StringHeaders, [Aoid, Code, byte_size(Body), Time]));
+                            logger:debug(io_lib:format("[Detergent] Requesting AOID: ~p, Status ~p. Bytes ~p. Time: ~pms. Headers: " ++ StringHeaders, [Aoid, Code, byte_size(Body), Time div 1000]));
                           _ -> 
                             nil
                         end;
