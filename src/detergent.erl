@@ -227,6 +227,16 @@ call_attach(#wsdl{operations = Operations, model = Model},
                                            ContentType),
                     ?dbg("+++ HttpRes = ~p~n", [HttpRes]),
             case HttpRes of
+            {ok, _Code, _ReturnHeaders, <<"\r\n--uuid", _/binary>> = Body} ->
+                case re:run(Body, "\<soap\:Envelope.+<\/soap\:Envelope\>") of
+                  {match, [{Start, End}]} ->
+                    ActualBody = binary:part(Body, Start, End),
+                    ResponseLogger(ActualBody),
+                    parseMessage(ActualBody, Model);
+                  nomatch ->
+                    ResponseLogger(Body),
+                    parseMessage(Body, Model)
+                  end;
             {ok, _Code, _ReturnHeaders, Body} ->
                 ResponseLogger(Body),
                 parseMessage(Body, Model);
