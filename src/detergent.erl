@@ -505,10 +505,11 @@ http_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentTyp
     end.
 
 hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, ContentType) ->
-    NewHeaders = [{"SOAPAction", SoapAction} | Headers],
-    NewHeaders2 = [{"Content-Type", ContentType} | NewHeaders],
-    BinaryHeaders = binary_headers(NewHeaders2, []),
-    case hackney:request(post, URL, BinaryHeaders, Request, HttpOptions) of
+    NewHeaders = [{"Content-Type", ContentType} | [{"SOAPAction", SoapAction} | Headers]],
+    BinaryHeaders = binary_headers(NewHeaders, []),
+    {timeout, Timeout} = proplists:lookup(timeout, HttpOptions),
+    NewHttpOptions = [{recv_timeout, Timeout} | [{checkout_timeout, Timeout} | HttpOptions]],
+    case hackney:request(post, URL, BinaryHeaders, Request, NewHttpOptions) of
         {ok, 200, ResponseHeaders, Reference} ->
             {ok, 200, ResponseHeaders, parse_hackney_response(ResponseHeaders, Reference)};
         Other ->
