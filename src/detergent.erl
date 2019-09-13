@@ -227,16 +227,6 @@ call_attach(#wsdl{operations = Operations, model = Model},
                                            ContentType),
                     ?dbg("+++ HttpRes = ~p~n", [HttpRes]),
             case HttpRes of
-            {ok, _Code, _ReturnHeaders, <<"\r\n--uuid", _/binary>> = Body} ->
-                case re:run(Body, "\<soap\:Envelope.+<\/soap\:Envelope\>") of
-                  {match, [{Start, End}]} ->
-                    ActualBody = binary:part(Body, Start, End),
-                    ResponseLogger(ActualBody),
-                    parseMessage(ActualBody, Model);
-                  nomatch ->
-                    ResponseLogger(Body),
-                    parseMessage(Body, Model)
-                  end;
             {ok, _Code, _ReturnHeaders, Body} ->
                 ResponseLogger(Body),
                 parseMessage(Body, Model);
@@ -502,14 +492,84 @@ get_local_file(Fname) ->
 %%% --------------------------------------------------------------------
 http_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType) ->
     % ibrowse disabled, because unknown how it supports the binary formats:
-    case disabled of %% code:ensure_loaded(ibrowse) of
+    case hackney of %% code:ensure_loaded(ibrowse) of
     {module, ibrowse} ->
         %% If ibrowse exist in the path then let's use it...
         ibrowse_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType);
+    hackney ->
+        %% So far hackney is the best way we could think of in order to support multipart responses
+        hackney_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType);
     _ ->
         %% ...otherwise, let's use the OTP http client.
         inets_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType)
     end.
+
+hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, ContentType) ->
+    NewHeaders = [{"SOAPAction", SoapAction} | Headers],
+    NewHeaders2 = [{"Content-Type", ContentType} | NewHeaders],
+    BinaryHeaders = binary_headers(NewHeaders2, []),
+    case hackney:request(post, URL, BinaryHeaders, Request, HttpOptions) of
+        {ok, 200, ResponseHeaders, Reference} ->
+            {ok, 200, ResponseHeaders, parse_hackney_response(ResponseHeaders, Reference)};
+        Other ->
+            Other
+    end.
+
+parse_hackney_response(ResponseHeaders, Reference) ->
+  Body = 
+    case is_multipart(ResponseHeaders) of
+        true ->
+            parse_multipart(Reference);
+        _ ->
+            {ok, Response} = hackney:body(Reference),
+            Response
+    end,
+  binary:bin_to_list(Body).
+
+is_multipart(Headers) ->
+    Header = proplists:lookup(<<"Content-Type">>, Headers),
+    case Header of
+        {_, <<"multipart/related; type=\"application/xop+xml\";", _/binary>>} -> 
+            true;
+        _ ->
+            false
+    end.
+
+parse_multipart(Reference) ->
+    {headers, _Headers} = hackney:stream_multipart(Reference),
+    {body, Body} = hackney:stream_multipart(Reference),
+    % io:format("Body: ~p~n", [Body]),
+    end_of_part = hackney:stream_multipart(Reference),
+    Attachments = parse_attachments(Reference, []),
+    inject_attachments(Body, Attachments).
+
+parse_attachments(Reference, Acc) ->
+    case hackney:stream_multipart(Reference) of
+        {headers, Headers} ->
+            {_, ContentId} = proplists:lookup(<<"Content-Id">>, Headers),
+            NewContentId = binary:part(ContentId, {1, byte_size(ContentId) - 2}),
+            {body, Content} = hackney:stream_multipart(Reference),
+            EncodedContent = base64:encode(Content),
+            end_of_part = hackney:stream_multipart(Reference),
+            parse_attachments(Reference, [{NewContentId, EncodedContent} | Acc]);
+        eof ->
+            Acc
+    end.
+
+inject_attachments(Body, []) -> Body;
+inject_attachments(Body, [{ContentId, Content} | Rest]) ->
+    NewBody = binary:replace(
+        Body, 
+      % <xop:Include xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" href=\"cid:3132a59e-d6d4-48f5-bd1f-365e12aaf5d1-177@www.bsi.bund.de\"/>
+        <<"<xop:Include xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" href=\"cid:", ContentId/binary, "\"/>">>,
+        Content),
+    inject_attachments(NewBody, Rest).
+
+binary_headers([], Acc) -> Acc;
+binary_headers([{_, _} = Header | Rest], Acc) -> binary_headers(Rest, [do_binary_header(Header) | Acc]).
+do_binary_header({K, V}) when is_list(K) -> do_binary_header({binary:list_to_bin(K), V});
+do_binary_header({K, V}) when is_list(V) -> do_binary_header({K, binary:list_to_bin(V)});
+do_binary_header(Header) -> Header.
 
 inets_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType) ->
     % To pass an iolist we need to wrap it in a fun.
