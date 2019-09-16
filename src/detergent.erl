@@ -227,9 +227,14 @@ call_attach(#wsdl{operations = Operations, model = Model},
                                            ContentType),
                     ?dbg("+++ HttpRes = ~p~n", [HttpRes]),
             case HttpRes of
+            {ok, _Code, _ReturnHeaders, {Body, ResponseAttachments}} ->
+                ResponseLogger(Body),
+                ParsedMessage = parseMessage(Body, Model),
+                appendAttachments(ParsedMessage, ResponseAttachments);
             {ok, _Code, _ReturnHeaders, Body} ->
                 ResponseLogger(Body),
-                parseMessage(Body, Model);
+                ParsedMessage = parseMessage(Body, Model),
+                appendAttachments(ParsedMessage, []);
             Error ->
                 %% in case of HTTP error: return
                             %% {error, description}
@@ -242,6 +247,8 @@ call_attach(#wsdl{operations = Operations, model = Model},
         {error, {unknown_operation, Operation}}
     end.
 
+appendAttachments(Tuple, Attachments) ->
+  erlang:insert_element(tuple_size(Tuple) + 1, Tuple, Attachments).
 %%%
 %%% returns {ok, Header, Body} | {error, Error}
 %%%
@@ -517,15 +524,13 @@ hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, Conten
     end.
 
 parse_hackney_response(ResponseHeaders, Reference) ->
-  Body = 
     case is_multipart(ResponseHeaders) of
         true ->
             parse_multipart(Reference);
         _ ->
             {ok, Response} = hackney:body(Reference),
-            Response
-    end,
-  binary:bin_to_list(Body).
+            binary:bin_to_list(Response)
+    end.
 
 is_multipart(Headers) ->
     Header = proplists:lookup(<<"Content-Type">>, Headers),
@@ -539,31 +544,41 @@ is_multipart(Headers) ->
 parse_multipart(Reference) ->
     {headers, _Headers} = hackney:stream_multipart(Reference),
     {body, Body} = hackney:stream_multipart(Reference),
-    % io:format("Body: ~p~n", [Body]),
     end_of_part = hackney:stream_multipart(Reference),
-    Attachments = parse_attachments(Reference, []),
-    inject_attachments(Body, Attachments).
+    % Return attachments directly, if there are some
+    case parse_attachments(Reference, []) of
+      [] -> 
+        binary:bin_to_list(Body);
+
+      Attachments when is_list(Attachments) -> 
+        InjectedAttachments = inject_attachments(Body, Attachments),
+        NewBody = binary:bin_to_list(InjectedAttachments),
+        {NewBody, Attachments}
+    end.
 
 parse_attachments(Reference, Acc) ->
     case hackney:stream_multipart(Reference) of
         {headers, Headers} ->
             {_, ContentId} = proplists:lookup(<<"Content-Id">>, Headers),
             NewContentId = binary:part(ContentId, {1, byte_size(ContentId) - 2}),
-            {body, Content} = hackney:stream_multipart(Reference),
-            EncodedContent = base64:encode(Content),
-            end_of_part = hackney:stream_multipart(Reference),
-            parse_attachments(Reference, [{NewContentId, EncodedContent} | Acc]);
+            Content = parse_content(Reference, []),
+            parse_attachments(Reference, [{NewContentId, Content} | Acc]);
         eof ->
             Acc
     end.
 
+parse_content(Reference, Acc) ->
+  case hackney:stream_multipart(Reference) of
+    {body, Body} -> parse_content(Reference, [Acc, Body]);
+    end_of_part -> erlang:list_to_binary(Acc)
+  end.
+
 inject_attachments(Body, []) -> Body;
-inject_attachments(Body, [{ContentId, Content} | Rest]) ->
+inject_attachments(Body, [{ContentId, _Content} | Rest]) ->
     NewBody = binary:replace(
         Body, 
-      % <xop:Include xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" href=\"cid:3132a59e-d6d4-48f5-bd1f-365e12aaf5d1-177@www.bsi.bund.de\"/>
         <<"<xop:Include xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" href=\"cid:", ContentId/binary, "\"/>">>,
-        Content),
+        ContentId),
     inject_attachments(NewBody, Rest).
 
 binary_headers([], Acc) -> Acc;
