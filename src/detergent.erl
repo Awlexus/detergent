@@ -525,29 +525,21 @@ hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, Conten
     end.
 
 parse_hackney_response(ResponseHeaders, Reference) ->
-    case is_multipart(ResponseHeaders) of
-        true ->
-            parse_multipart(Reference);
-        _ ->
-            {ok, Response} = hackney:body(Reference),
+    {ok, Response} = hackney:body(Reference),
+    case hackney_headers:parse(<<"Content-Type">>, ResponseHeaders) of
+        {<<"multipart">>, _, [_, {<<"boundary">>, Boundary} | _]} ->
+            Parser = hackney_multipart:parser(Boundary),
+            parse_multipart(Parser(Response));
+        _ -> 
             binary:bin_to_list(Response)
     end.
 
-is_multipart(Headers) ->
-    Header = proplists:lookup(<<"Content-Type">>, Headers),
-    case Header of
-        {_, <<"multipart/related; type=\"application/xop+xml\";", _/binary>>} -> 
-            true;
-        _ ->
-            false
-    end.
-
-parse_multipart(Reference) ->
-    {headers, _Headers} = hackney:stream_multipart(Reference),
-    {body, Body} = hackney:stream_multipart(Reference),
-    end_of_part = hackney:stream_multipart(Reference),
+parse_multipart(Init) ->
+    {headers, _Headers, Parser1} = Init,
+    {body, Body, Parser2} = Parser1(),
+    {end_of_part, Parser3} = Parser2(),
     % Return attachments directly, if there are some
-    case parse_attachments(Reference, []) of
+    case parse_attachments(Parser3, []) of
       [] -> 
         binary:bin_to_list(Body);
 
@@ -557,22 +549,17 @@ parse_multipart(Reference) ->
         {NewBody, Attachments}
     end.
 
-parse_attachments(Reference, Acc) ->
-    case hackney:stream_multipart(Reference) of
-        {headers, Headers} ->
+parse_attachments(Parser0, Acc) ->
+    case Parser0() of
+        {headers, Headers, Parser1} ->
             {_, ContentId} = proplists:lookup(<<"Content-Id">>, Headers),
             NewContentId = binary:part(ContentId, {1, byte_size(ContentId) - 2}),
-            Content = parse_content(Reference, []),
-            parse_attachments(Reference, [{NewContentId, Content} | Acc]);
+            {body, Content, Parser2} = Parser1(),
+            {end_of_part, Parser3} = Parser2(),
+            parse_attachments(Parser3, [{NewContentId, Content} | Acc]);
         eof ->
             Acc
     end.
-
-parse_content(Reference, Acc) ->
-  case hackney:stream_multipart(Reference) of
-    {body, Body} -> parse_content(Reference, [Acc, Body]);
-    end_of_part -> erlang:list_to_binary(Acc)
-  end.
 
 inject_attachments(Body, []) -> Body;
 inject_attachments(Body, [{ContentId, _Content} | Rest]) ->
