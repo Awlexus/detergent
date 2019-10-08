@@ -566,7 +566,7 @@ inject_attachments(Body, [{ContentId, _Content} | Rest]) ->
     NewBody = binary:replace(
         Body, 
         <<"<xop:Include xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" href=\"cid:", ContentId/binary, "\"/>">>,
-        ContentId),
+        <<"INCLUDE:", ContentId/binary>>),
     inject_attachments(NewBody, Rest).
 
 binary_headers([], Acc) -> Acc;
