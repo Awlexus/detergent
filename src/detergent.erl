@@ -31,6 +31,7 @@
 
 
 -include_lib("detergent.hrl").
+-include_lib("xmerl/include/xmerl.hrl").
 
 -define(HTTP_REQ_TIMEOUT, 20000).
 
@@ -544,9 +545,7 @@ parse_multipart(Init) ->
         binary:bin_to_list(Body);
 
       Attachments when is_list(Attachments) -> 
-        InjectedAttachments = inject_attachments(Body, Attachments),
-        NewBody = binary:bin_to_list(InjectedAttachments),
-        {NewBody, Attachments}
+        {inject_attachments(Body), Attachments}
     end.
 
 parse_attachments(Parser0, Acc) ->
@@ -561,14 +560,17 @@ parse_attachments(Parser0, Acc) ->
             Acc
     end.
 
-inject_attachments(Body, []) -> Body;
-inject_attachments(Body, [{ContentId, _Content} | Rest]) ->
-    NewBody = binary:replace(
-        Body, 
-        <<"<xop:Include xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" href=\"cid:", ContentId/binary, "\"/>">>,
-        <<"INCLUDE:", ContentId/binary>>),
-    inject_attachments(NewBody, Rest).
-
+inject_attachments(#xmlElement{name='xop:Include', parents=Parents, attributes=Attributes, pos=Pos}) -> 
+  Href = lists:keyfind(href, 2, Attributes),
+  {xmlText, Parents, Pos, [], Href#xmlAttribute.value, text};
+inject_attachments(#xmlElement{content=Content} = Elem) ->
+  Elem#xmlElement{content=lists:map(fun inject_attachments/1, Content)};
+inject_attachments(Tuple) when is_tuple(Tuple) ->
+  Tuple;
+inject_attachments(Body) ->
+  {Xml, _} = xmerl_scan:string(erlang:binary_to_list(Body)),
+  lists:flatten(xmerl:export([inject_attachments(Xml)], xmerl_xml)).
+  
 binary_headers([], Acc) -> Acc;
 binary_headers([{_, _} = Header | Rest], Acc) -> binary_headers(Rest, [do_binary_header(Header) | Acc]).
 do_binary_header({K, V}) when is_list(K) -> do_binary_header({binary:list_to_bin(K), V});
