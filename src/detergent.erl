@@ -517,22 +517,21 @@ hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, Conten
     BinaryHeaders = binary_headers(NewHeaders, []),
     {timeout, Timeout} = proplists:lookup(timeout, HttpOptions),
     {ssl, SSLOptions} = proplists:lookup(ssl, HttpOptions),
-    NewHttpOptions = [{ssl_options, SSLOptions} | [{recv_timeout, Timeout} | [{checkout_timeout, Timeout} | HttpOptions]]],
+    NewHttpOptions = [{with_body, true}, {ssl_options, SSLOptions}, {recv_timeout, Timeout}, {checkout_timeout, Timeout}] ++ HttpOptions,
     case hackney:request(post, URL, BinaryHeaders, Request, NewHttpOptions) of
-        {ok, 200, ResponseHeaders, Reference} ->
-            {ok, 200, ResponseHeaders, parse_hackney_response(ResponseHeaders, Reference)};
+        {ok, 200, ResponseHeaders, Body} ->
+            {ok, 200, ResponseHeaders, parse_hackney_response(ResponseHeaders, Body)};
         Other ->
             Other
     end.
 
-parse_hackney_response(ResponseHeaders, Reference) ->
-    {ok, Response} = hackney:body(Reference),
+parse_hackney_response(ResponseHeaders, Body) ->
     case hackney_headers:parse(<<"Content-Type">>, ResponseHeaders) of
         {<<"multipart">>, _, [_, {<<"boundary">>, Boundary} | _]} ->
             Parser = hackney_multipart:parser(Boundary),
-            parse_multipart(Parser(Response));
-        _ -> 
-            binary:bin_to_list(Response)
+            parse_multipart(Parser(Body));
+        _ ->
+            binary:bin_to_list(Body)
     end.
 
 parse_multipart(Init) ->
@@ -541,10 +540,10 @@ parse_multipart(Init) ->
     {end_of_part, Parser3} = Parser2(),
     % Return attachments directly, if there are some
     case parse_attachments(Parser3, []) of
-      [] -> 
+      [] ->
         binary:bin_to_list(Body);
 
-      Attachments when is_list(Attachments) -> 
+      Attachments when is_list(Attachments) ->
         {inject_attachments(Body), Attachments}
     end.
 
@@ -560,7 +559,7 @@ parse_attachments(Parser0, Acc) ->
             Acc
     end.
 
-inject_attachments(#xmlElement{name='xop:Include', parents=Parents, attributes=Attributes, pos=Pos}) -> 
+inject_attachments(#xmlElement{name='xop:Include', parents=Parents, attributes=Attributes, pos=Pos}) ->
   Href = lists:keyfind(href, 2, Attributes),
   {xmlText, Parents, Pos, [], Href#xmlAttribute.value, text};
 inject_attachments(#xmlElement{content=Content} = Elem) ->
@@ -570,7 +569,7 @@ inject_attachments(Tuple) when is_tuple(Tuple) ->
 inject_attachments(Body) ->
   {Xml, _} = xmerl_scan:string(erlang:binary_to_list(Body)),
   lists:flatten(xmerl:export([inject_attachments(Xml)], xmerl_xml)).
-  
+
 binary_headers([], Acc) -> Acc;
 binary_headers([{_, _} = Header | Rest], Acc) -> binary_headers(Rest, [do_binary_header(Header) | Acc]).
 do_binary_header({K, V}) when is_list(K) -> do_binary_header({binary:list_to_bin(K), V});
