@@ -230,11 +230,11 @@ call_attach(#wsdl{operations = Operations, model = Model},
             case HttpRes of
             {ok, _Code, _ReturnHeaders, {Body, ResponseAttachments}} ->
                 ResponseLogger(Body),
-                ParsedMessage = parseMessage(Body, Model),
+                ParsedMessage = wrapParseMessage(Body, Model),
                 appendAttachments(ParsedMessage, ResponseAttachments);
             {ok, _Code, _ReturnHeaders, Body} ->
                 ResponseLogger(Body),
-                ParsedMessage = parseMessage(Body, Model),
+                ParsedMessage = wrapParseMessage(Body, Model),
                 appendAttachments(ParsedMessage, []);
             Error ->
                 %% in case of HTTP error: return
@@ -250,6 +250,16 @@ call_attach(#wsdl{operations = Operations, model = Model},
 
 appendAttachments(Tuple, Attachments) ->
   erlang:insert_element(tuple_size(Tuple) + 1, Tuple, Attachments).
+
+wrapParseMessage(Message, Model) ->
+  try parseMessage(Message, Model) of
+    Res -> Res
+  catch
+    Throw ->
+      io:format("Could not parse message: ~p~n", [Message]),
+      Throw
+  end.
+
 %%%
 %%% returns {ok, Header, Body} | {error, Error}
 %%%
@@ -267,7 +277,6 @@ parseMessage(Message, Model) ->
     {error, ErrorMessage} ->
         {error, {decoding, ErrorMessage}}
     end.
-
 
 findOperation(_Operation, _Port, _Service, []) ->
     false;
@@ -531,7 +540,7 @@ parse_hackney_response(ResponseHeaders, Body) ->
             Parser = hackney_multipart:parser(Boundary),
             parse_multipart(Parser(Body));
         _ ->
-            binary:bin_to_list(Body)
+            Body
     end.
 
 parse_multipart(Init) ->
@@ -541,7 +550,7 @@ parse_multipart(Init) ->
     % Return attachments directly, if there are some
     case parse_attachments(Parser3, []) of
       [] ->
-        binary:bin_to_list(Body);
+        Body;
 
       Attachments when is_list(Attachments) ->
         {inject_attachments(Body), Attachments}
