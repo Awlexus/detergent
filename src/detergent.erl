@@ -275,6 +275,7 @@ parseMessage(Message, Model) ->
                   'Header' = #'soap:Header'{choice = Header}}, _} ->
         {ok, Header, Body};
     {error, ErrorMessage} ->
+        io:format("Could not parse message: ~p~n", [Message]),
         {error, {decoding, ErrorMessage}}
     end.
 
