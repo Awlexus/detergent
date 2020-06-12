@@ -230,12 +230,20 @@ call_attach(#wsdl{operations = Operations, model = Model},
             case HttpRes of
             {ok, _Code, _ReturnHeaders, {Body, ResponseAttachments}} ->
                 ResponseLogger(Body),
-                ParsedMessage = wrapParseMessage(Body, Model),
+                ParsedMessage = parseMessage(Body, Model),
                 appendAttachments(ParsedMessage, ResponseAttachments);
             {ok, _Code, _ReturnHeaders, Body} ->
                 ResponseLogger(Body),
-                ParsedMessage = wrapParseMessage(Body, Model),
+                ParsedMessage = parseMessage(Body, Model),
                 appendAttachments(ParsedMessage, []);
+            {error, Code, _ReturnHeaders, {Body, ResponseAttachments}} ->
+                ResponseLogger(Body),
+                ParsedMessage = parseMessage(Body, Model),
+                {error, {Code, appendAttachments(ParsedMessage, ResponseAttachments)}};
+            {error, Code, _ReturnHeaders, Body} ->
+                ResponseLogger(Body),
+                ParsedMessage = parseMessage(Body, Model),
+                {error, {Code, appendAttachments(ParsedMessage, [])}};
             Error ->
                 %% in case of HTTP error: return
                             %% {error, description}
@@ -248,17 +256,10 @@ call_attach(#wsdl{operations = Operations, model = Model},
         {error, {unknown_operation, Operation}}
     end.
 
-appendAttachments(Tuple, Attachments) ->
-  erlang:insert_element(tuple_size(Tuple) + 1, Tuple, Attachments).
+appendAttachments(Tuple, Attachments) when is_tuple(Tuple) ->
+  erlang:insert_element(tuple_size(Tuple) + 1, Tuple, Attachments);
 
-wrapParseMessage(Message, Model) ->
-  try parseMessage(Message, Model) of
-    Res -> Res
-  catch
-    Throw ->
-      io:format("Could not parse message: ~p~n", [Message]),
-      Throw
-  end.
+appendAttachments(Other, _Attachments) -> Other.
 
 %%%
 %%% returns {ok, Header, Body} | {error, Error}
@@ -275,7 +276,7 @@ parseMessage(Message, Model) ->
                   'Header' = #'soap:Header'{choice = Header}}, _} ->
         {ok, Header, Body};
     {error, ErrorMessage} ->
-        io:format("Could not parse message: ~p~n", [Message]),
+        logger:error("Unexpected Response: ~p~n", [Message]),
         {error, {decoding, ErrorMessage}}
     end.
 
@@ -529,8 +530,11 @@ hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, Conten
     {ssl, SSLOptions} = proplists:lookup(ssl, HttpOptions),
     NewHttpOptions = [{with_body, true}, {ssl_options, SSLOptions}, {recv_timeout, Timeout}, {checkout_timeout, Timeout}] ++ HttpOptions,
     case hackney:request(post, URL, BinaryHeaders, Request, NewHttpOptions) of
-        {ok, 200, ResponseHeaders, Body} ->
-            {ok, 200, ResponseHeaders, parse_hackney_response(ResponseHeaders, Body)};
+        {ok, Code, ResponseHeaders, Body} when 200 =< Code, Code < 300 ->
+            {ok, Code, ResponseHeaders, parse_hackney_response(ResponseHeaders, Body)};
+
+        {ok, Code, ResponseHeaders, Body} when 200 =< Code, Code < 300 ->
+            {error, Code, ResponseHeaders, parse_hackney_response(ResponseHeaders, Body)};
         Other ->
             Other
     end.
