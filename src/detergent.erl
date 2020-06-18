@@ -533,7 +533,7 @@ hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, Conten
         {ok, Code, ResponseHeaders, Body} when 200 =< Code, Code < 300 ->
             {ok, Code, ResponseHeaders, parse_hackney_response(ResponseHeaders, Body)};
 
-        {ok, Code, ResponseHeaders, Body} when 200 =< Code, Code < 300 ->
+        {ok, Code, ResponseHeaders, Body} ->
             {error, Code, ResponseHeaders, parse_hackney_response(ResponseHeaders, Body)};
         Other ->
             Other
