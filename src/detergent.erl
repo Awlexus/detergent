@@ -524,13 +524,20 @@ http_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentTyp
     end.
 
 hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, ContentType) ->
+    Mtom = proplists:get_value(mtom, HttpOptions),
     {timeout, Timeout} = proplists:lookup(timeout, HttpOptions),
     {ssl, SSLOptions} = proplists:lookup(ssl, HttpOptions),
-    NewHttpOptions = [{with_body, true}, {ssl_options, SSLOptions}, {recv_timeout, Timeout}, {checkout_timeout, Timeout}] ++ HttpOptions,
+    NewHttpOptions = [{with_body, true}, {ssl_options, SSLOptions}, {recv_timeout, Timeout}, {checkout_timeout, Timeout} | proplists:delete(mtom, HttpOptions)],
 
-    Result = case re:run(Request, "<xaip:binaryData[^>]*>([^<]+)</xaip:binaryData>") of
-        {match, [_, DataPos] } -> do_hackney_request_multipart(URL, SoapAction, Request, DataPos, NewHttpOptions, ContentType);
-        _                      -> do_hackney_request(URL, SoapAction, Request, Headers, NewHttpOptions, ContentType)
+    Result = if
+      Mtom ->
+        case re:run(Request, "<xaip:binaryData[^>]*>([^<]+)</xaip:binaryData>") of
+          {match, [_, DataPos] } -> do_hackney_request_multipart(URL, SoapAction, Request, DataPos, NewHttpOptions, ContentType);
+          _                      -> do_hackney_request(URL, SoapAction, Request, Headers, NewHttpOptions, ContentType)
+        end;
+
+      true ->
+        do_hackney_request(URL, SoapAction, Request, Headers, NewHttpOptions, ContentType)
     end,
 
     case Result of
@@ -539,6 +546,7 @@ hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, Conten
 
         {ok, Code, ResponseHeaders, Body} ->
             {error, Code, ResponseHeaders, parse_hackney_response(ResponseHeaders, Body)};
+
         Other ->
             Other
     end.
@@ -603,7 +611,8 @@ do_hackney_request_multipart(URL, SoapAction, Request, {DataStart, DataEnd} = Da
     % {NewRequest, NewRequestHeaders}.
 
 do_hackney_request(URL, SoapAction, Request, Headers0, HttpOptions, ContentType) ->
-  Headers1 = [{"Content-Type", ContentType}, {"SoapAction", SoapAction} | Headers0],
+  Headers1 = binary_headers([{"Content-Type", ContentType}, {"SoapAction", SoapAction} | Headers0], []),
+  % io:format("~p~n~p~n~s~n~p~n~p~n~p~n", [URL, SoapAction, Request, Headers1, HttpOptions, ContentType]),
   hackney:request(post, URL, Headers1, Request, HttpOptions).
 
 parse_hackney_response(ResponseHeaders, Body) ->
