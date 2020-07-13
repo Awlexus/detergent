@@ -524,12 +524,16 @@ http_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentTyp
     end.
 
 hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, ContentType) ->
-    NewHeaders = [{"Content-Type", ContentType} | [{"SOAPAction", SoapAction} | Headers]],
-    BinaryHeaders = binary_headers(NewHeaders, []),
     {timeout, Timeout} = proplists:lookup(timeout, HttpOptions),
     {ssl, SSLOptions} = proplists:lookup(ssl, HttpOptions),
     NewHttpOptions = [{with_body, true}, {ssl_options, SSLOptions}, {recv_timeout, Timeout}, {checkout_timeout, Timeout}] ++ HttpOptions,
-    case hackney:request(post, URL, BinaryHeaders, Request, NewHttpOptions) of
+
+    Result = case re:run(Request, "<xaip:binaryData[^>]*>([^<]+)</xaip:binaryData>") of
+        {match, [_, DataPos] } -> do_hackney_request_multipart(URL, SoapAction, Request, DataPos, NewHttpOptions, ContentType);
+        _                      -> do_hackney_request(URL, SoapAction, Request, Headers, NewHttpOptions, ContentType)
+    end,
+
+    case Result of
         {ok, Code, ResponseHeaders, Body} when 200 =< Code, Code < 300 ->
             {ok, Code, ResponseHeaders, parse_hackney_response(ResponseHeaders, Body)};
 
@@ -538,6 +542,69 @@ hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, Conten
         Other ->
             Other
     end.
+
+do_hackney_request_multipart(URL, SoapAction, Request, {DataStart, DataEnd} = Data, HttpOptions, ContentType) ->
+    Boundary = binary:list_to_bin(io_lib:format("~p", [make_ref()])),
+    EndPos = DataStart + DataEnd,
+    Request1 = binary:list_to_bin(Request),
+    DecodedData = base64:decode(binary:part(Request1, Data)),
+    DocStart = binary:part(Request1, {0, DataStart}),
+    DocEnd = binary:part(Request1, {EndPos, byte_size(Request1) - EndPos}),
+
+    RequestContentType = list_to_binary(io_lib:format("multipart/related; type=\"text/xml\"; start=\"document\"; boundary=\"~s\"", [Boundary])),
+    Document = binary:list_to_bin(io_lib:format("~s<xop:Include xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" href=\"cid:attachment\"/>~s", [DocStart, DocEnd])),
+
+    Headers1 = binary_headers([
+        {"Content-Type", RequestContentType},
+        {"MIME-Version", "1.0"},
+        {"Accept", "*/*"},
+        {"SoapAction", SoapAction},
+        {"Transfer-Encoding", <<"chunked">>} ], []),
+
+    XMLHeaders = binary_headers([
+      {"Content-Type", ContentType},
+      {"Content-id", "document"},
+      {"Content-Length", integer_to_binary(byte_size(Document))}], []),
+
+    FileHeaders = binary_headers([
+      {"Content-Type", "application/octet-stream"},
+      {"Content-id", "attachment"},
+      {"Content-Transfer-Encoding", "binary"}
+    ], []),
+
+    {ok, Ref} = hackney:request(post, URL, Headers1, {stream_multipart, chunked, Boundary}, HttpOptions),
+
+    hackney:send_multipart_body(Ref, {part, XMLHeaders}),
+    hackney:send_multipart_body(Ref, {part_bin, Document}),
+    hackney:send_multipart_body(Ref, {part, eof}),
+    hackney:send_multipart_body(Ref, {part, FileHeaders}),
+    hackney:send_multipart_body(Ref, {part_bin, DecodedData}),
+    hackney:send_multipart_body(Ref, {part, eof}),
+    hackney:send_multipart_body(Ref, eof),
+
+    hackney:start_response(Ref).
+
+    % NewRequest = {multipart, [{
+    %   <<"document">>, Document, [
+    %     {<<"content-type">>, ContentType},
+    %       {"content-id", "dokument"}
+    %   ]},
+    %     {<<"attachment">>, DecodedData, [
+    %       {"content-type", "application/octet-stream"},
+    %       {"content-id", "attachment"}
+    %   ]}
+    % ]},
+
+    % NewRequestHeaders = [
+    %     {"Content-Type", <<"multipart/related; type=\"text/xml\"; boundary=MIME_boundary; start=\"dokument\"">>},
+    %     {"Transfer-Encoding", <<"chunked">>}
+    % ],
+
+    % {NewRequest, NewRequestHeaders}.
+
+do_hackney_request(URL, SoapAction, Request, Headers0, HttpOptions, ContentType) ->
+  Headers1 = [{"Content-Type", ContentType}, {"SoapAction", SoapAction} | Headers0],
+  hackney:request(post, URL, Headers1, Request, HttpOptions).
 
 parse_hackney_response(ResponseHeaders, Body) ->
     case hackney_headers:parse(<<"Content-Type">>, ResponseHeaders) of
