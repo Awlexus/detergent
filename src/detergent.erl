@@ -12,8 +12,8 @@
 -export([initModel/1, initModel/2, initModel/3, initModel/5,
      initModelFile/1,
      config_file_xsd/0,
-     call/3, call/4, call/5, call/6, call/7,
-     call_attach/4, call_attach/5, call_attach/6, call_attach/8,
+     call/3, call/4, call/5, call/6, call/7, call/8,
+     call_attach/4, call_attach/5, call_attach/6, call_attach/8, call_attach/9,
      write_hrl/2, write_hrl/3,
      findHeader/2,
      parseMessage/2,
@@ -150,8 +150,10 @@ call(Wsdl, Operation, Port, Service, Headers, Message) ->
     call(Wsdl, Operation, Port, Service, Headers, Message, #call_opts{}).
 
 call(Wsdl, Operation, Port, Service, Headers, Message, CallOpts) ->
-    call_attach(Wsdl, Operation, Port, Service, Headers, Message, [], CallOpts).
+    call(Wsdl, Operation, Port, Service, Headers, Message, CallOpts, []).
 
+call(Wsdl, Operation, Port, Service, Headers, Message, CallOpts, MtomAttachments) ->
+    call_attach(Wsdl, Operation, Port, Service, Headers, Message, [], CallOpts, MtomAttachments).
 
 %%% --------------------------------------------------------------------
 %%% For Quick deployment (with attachments)
@@ -193,6 +195,9 @@ call_attach(Wsdl, Operation, Header, Msg, Attachments, CallOpts)
         Else
     end.
 
+call_attach(Wsdl, Operation, Port, Service, Headers, Message, Attachments, CallOpts) ->
+  call_attach(Wsdl, Operation, Port, Service, Headers, Message, Attachments, CallOpts, []).
+
 
 %%% --------------------------------------------------------------------
 %%% Make a SOAP request (with attachments)
@@ -203,7 +208,7 @@ call_attach(#wsdl{operations = Operations, model = Model},
                        http_options=HttpOptions,
                        http_client_options=HttpClientOptions,
                        request_logger=RequestLogger,
-                       response_logger=ResponseLogger}) ->
+                       response_logger=ResponseLogger}, MtomAttachments) ->
     %% find the operation
     case findOperation(Operation, Port, Service, Operations) of
     #operation{address = Address, action = SoapAction} ->
@@ -225,7 +230,7 @@ call_attach(#wsdl{operations = Operations, model = Model},
             HttpRes = http_request(URL, SoapAction, Request,
                                            HttpOptions,
                                            HttpClientOptions, HttpHeaders,
-                                           ContentType),
+                                           ContentType, MtomAttachments),
                     ?dbg("+++ HttpRes = ~p~n", [HttpRes]),
             case HttpRes of
             {ok, _Code, _ReturnHeaders, {Body, ResponseAttachments}} ->
@@ -509,7 +514,7 @@ get_local_file(Fname) ->
 %%% --------------------------------------------------------------------
 %%% Make a HTTP Request
 %%% --------------------------------------------------------------------
-http_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType) ->
+http_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType, MtomAttachments) ->
     % ibrowse disabled, because unknown how it supports the binary formats:
     case hackney of %% code:ensure_loaded(ibrowse) of
     {module, ibrowse} ->
@@ -517,24 +522,21 @@ http_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentTyp
         ibrowse_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType);
     hackney ->
         %% So far hackney is the best way we could think of in order to support multipart responses
-        hackney_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType);
+        hackney_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType, MtomAttachments);
     _ ->
         %% ...otherwise, let's use the OTP http client.
         inets_request(URL, SoapAction, Request, HttpOptions, Options, Headers, ContentType)
     end.
 
-hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, ContentType) ->
+hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, ContentType, MtomAttachments) ->
     Mtom = proplists:get_value(mtom, HttpOptions),
     {timeout, Timeout} = proplists:lookup(timeout, HttpOptions),
     {ssl, SSLOptions} = proplists:lookup(ssl, HttpOptions),
     NewHttpOptions = [{with_body, true}, {ssl_options, SSLOptions}, {recv_timeout, Timeout}, {checkout_timeout, Timeout} | proplists:delete(mtom, HttpOptions)],
 
     Result = if
-      Mtom ->
-        case re:run(Request, "<xaip:binaryData[^>]*>([^<]+)</xaip:binaryData>") of
-          {match, [_, DataPos] } -> do_hackney_request_multipart(URL, SoapAction, Request, DataPos, NewHttpOptions, ContentType);
-          _                      -> do_hackney_request(URL, SoapAction, Request, Headers, NewHttpOptions, ContentType)
-        end;
+      MtomAttachments =/= [] andalso Mtom ->
+        do_multipart_if_necessary(URL, SoapAction, Request, NewHttpOptions, headers, ContentType, MtomAttachments, []);
 
       true ->
         do_hackney_request(URL, SoapAction, Request, Headers, NewHttpOptions, ContentType)
@@ -551,16 +553,38 @@ hackney_request(URL, SoapAction, Request, HttpOptions, _Options, Headers, Conten
             Other
     end.
 
-do_hackney_request_multipart(URL, SoapAction, Request, {DataStart, DataEnd} = Data, HttpOptions, ContentType) ->
-    Boundary = binary:list_to_bin(io_lib:format("~p", [make_ref()])),
+do_multipart_if_necessary(URL, SoapAction, Request, HttpOptions, Headers, ContentType, [], []) ->
+  do_hackney_request(URL, SoapAction, Request, Headers, HttpOptions, ContentType);
+
+do_multipart_if_necessary(URL, SoapAction, Request, HttpOptions, _Headers, ContentType, [], Files) ->
+  do_hackney_request_multipart(URL, SoapAction, Request, HttpOptions, ContentType, Files);
+
+do_multipart_if_necessary(URL, SoapAction, Request, HttpOptions, Headers, ContentType, [{Tag, Data} | Rest], Files) ->
+  case re:run(Request, io_lib:format("<~s[^>]*>([^<]+)</~s>", [Tag, Tag])) of
+    {match, [_, DataPos] } ->
+      {NewRequest, AttachmentName} = extract_tag(Request, DataPos),
+      do_multipart_if_necessary(URL, SoapAction, NewRequest, HttpOptions, Headers, ContentType, Rest, [{AttachmentName, Data} | Files]);
+
+    _ ->
+      do_multipart_if_necessary(URL, SoapAction, Request, HttpOptions, Headers, ContentType, Rest, Files)
+  end.
+
+extract_tag(Request, DataPos) when is_list(Request) ->
+    extract_tag(list_to_binary(Request), DataPos);
+extract_tag(Request, {DataStart, DataEnd} = DataPos) ->
     EndPos = DataStart + DataEnd,
-    Request1 = binary:list_to_bin(Request),
-    DecodedData = base64:decode(binary:part(Request1, Data)),
-    DocStart = binary:part(Request1, {0, DataStart}),
-    DocEnd = binary:part(Request1, {EndPos, byte_size(Request1) - EndPos}),
+    AttachmentName = binary:part(Request, DataPos),
+    DocStart = binary:part(Request, {0, DataStart}),
+    DocEnd = binary:part(Request, {EndPos, byte_size(Request) - EndPos}),
+    NewRequest = binary:list_to_bin(io_lib:format("~s<xop:Include xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" href=\"cid:~s\"/>~s", [DocStart, AttachmentName, DocEnd])),
+
+    {NewRequest, AttachmentName}.
+
+
+do_hackney_request_multipart(URL, SoapAction, Request, HttpOptions, ContentType, Files) ->
+    Boundary = binary:list_to_bin(io_lib:format("~p", [make_ref()])),
 
     RequestContentType = list_to_binary(io_lib:format("multipart/related; type=\"text/xml\"; start=\"document\"; boundary=\"~s\"", [Boundary])),
-    Document = binary:list_to_bin(io_lib:format("~s<xop:Include xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" href=\"cid:attachment\"/>~s", [DocStart, DocEnd])),
 
     Headers1 = binary_headers([
         {"Content-Type", RequestContentType},
@@ -572,43 +596,29 @@ do_hackney_request_multipart(URL, SoapAction, Request, {DataStart, DataEnd} = Da
     XMLHeaders = binary_headers([
       {"Content-Type", ContentType},
       {"Content-id", "document"},
-      {"Content-Length", integer_to_binary(byte_size(Document))}], []),
-
-    FileHeaders = binary_headers([
-      {"Content-Type", "application/octet-stream"},
-      {"Content-id", "attachment"},
-      {"Content-Transfer-Encoding", "binary"}
-    ], []),
+      {"Content-Length", integer_to_binary(byte_size(Request))}], []),
 
     {ok, Ref} = hackney:request(post, URL, Headers1, {stream_multipart, chunked, Boundary}, HttpOptions),
 
     hackney:send_multipart_body(Ref, {part, XMLHeaders}),
-    hackney:send_multipart_body(Ref, {part_bin, Document}),
+    hackney:send_multipart_body(Ref, {part_bin, Request}),
     hackney:send_multipart_body(Ref, {part, eof}),
-    hackney:send_multipart_body(Ref, {part, FileHeaders}),
-    hackney:send_multipart_body(Ref, {part_bin, DecodedData}),
-    hackney:send_multipart_body(Ref, {part, eof}),
+    send_multipart_files(Ref, Files),
     hackney:send_multipart_body(Ref, eof),
 
     hackney:start_response(Ref).
 
-    % NewRequest = {multipart, [{
-    %   <<"document">>, Document, [
-    %     {<<"content-type">>, ContentType},
-    %       {"content-id", "dokument"}
-    %   ]},
-    %     {<<"attachment">>, DecodedData, [
-    %       {"content-type", "application/octet-stream"},
-    %       {"content-id", "attachment"}
-    %   ]}
-    % ]},
-
-    % NewRequestHeaders = [
-    %     {"Content-Type", <<"multipart/related; type=\"text/xml\"; boundary=MIME_boundary; start=\"dokument\"">>},
-    %     {"Transfer-Encoding", <<"chunked">>}
-    % ],
-
-    % {NewRequest, NewRequestHeaders}.
+send_multipart_files(_Ref, []) -> ok;
+send_multipart_files(Ref, [{ContentId, Data} | Rest]) ->
+    FileHeaders = binary_headers([
+      {"Content-Type", "application/octet-stream"},
+      {"Content-id", ContentId},
+      {"Content-Transfer-Encoding", "binary"}
+    ], []),
+    hackney:send_multipart_body(Ref, {part, FileHeaders}),
+    hackney:send_multipart_body(Ref, {part_bin, Data}),
+    hackney:send_multipart_body(Ref, {part, eof}),
+    send_multipart_files(Ref, Rest).
 
 do_hackney_request(URL, SoapAction, Request, Headers0, HttpOptions, ContentType) ->
   Headers1 = binary_headers([{"Content-Type", ContentType}, {"SoapAction", SoapAction} | Headers0], []),
